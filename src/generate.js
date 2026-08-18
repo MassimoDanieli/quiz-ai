@@ -9,7 +9,16 @@
 import { parseJsonLoose, validateQuestion, LETTERS } from './schema.js';
 import { debiasBatch, MAX_LENGTH_MARGIN } from './debias.js';
 
-export const DIFFICULTIES = ['easy', 'medium', 'hard'];
+/**
+ * Difficulty tiers.
+ *
+ * These are Team Quiz's vocabulary, not a generic one: its 664 curated
+ * questions are already tagged medium/hard/pro, the host UI filters on those
+ * three, and the engine defaults an untagged question to 'hard'. A generated
+ * question has to sit in the same pool as a curated one, so the generator
+ * speaks the incumbent's language rather than inventing a parallel scale.
+ */
+export const DIFFICULTIES = ['medium', 'hard', 'pro'];
 
 const SYSTEM_PROMPT = `You write multiple-choice questions for a live team quiz used to train early-career software engineers.
 
@@ -185,10 +194,10 @@ function buildUserPrompt({ topic, difficulty, requested, avoid }) {
 
 function difficultyHint(difficulty) {
   switch (difficulty) {
-    case 'easy':
-      return 'someone three months into the role should get it';
     case 'hard':
-      return 'requires having debugged this in production';
+      return 'requires having debugged this in production at least once';
+    case 'pro':
+      return 'a specialist question — most of the room should get it wrong';
     default:
       return 'a competent junior engineer gets it about half the time';
   }

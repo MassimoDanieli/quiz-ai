@@ -301,3 +301,23 @@ test('prewarm skips options that are already cached', async () => {
   assert.equal(result.warmed, 4);
   assert.equal(calls.length, 4, 'the cached option should not be re-fetched');
 });
+
+test('generateQuestions accepts the Team Quiz difficulty tiers', async () => {
+  for (const difficulty of ['medium', 'hard', 'pro']) {
+    const { client: c, calls } = client([textResponse(GENERATED)]);
+    const { questions } = await generateQuestions(
+      { client: c },
+      { topic: 'kubernetes', difficulty, count: 1, overAsk: 0, perCall: 1 },
+    );
+    assert.equal(questions[0].difficulty, difficulty);
+    assert.match(calls[0].body.messages[0].content, new RegExp(`Difficulty: ${difficulty}`));
+  }
+});
+
+test('generateQuestions still rejects a tier outside the vocabulary', async () => {
+  const { client: c } = client([textResponse(GENERATED)]);
+  await assert.rejects(
+    () => generateQuestions({ client: c }, { topic: 'aws', difficulty: 'easy' }),
+    /difficulty must be one of: medium, hard, pro/,
+  );
+});
