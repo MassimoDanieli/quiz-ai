@@ -170,6 +170,28 @@ export class QuestionQueue {
     return { question, source };
   }
 
+  /**
+   * Tell the queue about questions written in earlier sessions, so the
+   * generator is asked not to repeat them.
+   *
+   * Without this a restart loses the avoid-list and the model cheerfully
+   * rewrites the same questions it wrote yesterday — which the caller then
+   * discards as duplicates, having paid for them.
+   *
+   * @param {string[]} stems Question texts.
+   */
+  seedAsked(stems) {
+    if (!Array.isArray(stems)) return 0;
+    for (const stem of stems) {
+      if (typeof stem === 'string' && stem.trim()) this.asked.push(stem.trim());
+    }
+    // The prompt only carries the most recent slice, so keep the tail bounded
+    // rather than growing a list that is mostly never sent.
+    const MAX = 200;
+    if (this.asked.length > MAX) this.asked = this.asked.slice(-MAX);
+    return this.asked.length;
+  }
+
   /** Change topic mid-session. Drops the buffer, since it is now off-topic. */
   async retarget({ topic, difficulty } = {}) {
     if (topic) this.topic = topic;

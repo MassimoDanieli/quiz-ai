@@ -234,3 +234,27 @@ test('reset re-closes the breaker after the problem is fixed', async () => {
   assert.ok(queue.size > 0, 'should generate again after reset');
   assert.equal(queue.health, null);
 });
+
+test('seedAsked puts earlier sessions into the avoid list', async () => {
+  const { generate, calls } = stubGenerator();
+  const queue = new QuestionQueue({ generate }, { topic: 'aws' });
+
+  queue.seedAsked(['What is an availability zone?', 'When does an EBS volume detach?']);
+  await queue.prime();
+
+  assert.match(calls[0].avoid.join('|'), /availability zone/);
+  assert.equal(calls[0].avoid.length, 2);
+});
+
+test('seedAsked keeps the avoid list bounded and ignores junk', () => {
+  const { generate } = stubGenerator();
+  const queue = new QuestionQueue({ generate }, { topic: 'aws' });
+
+  queue.seedAsked(Array.from({ length: 500 }, (_, i) => `Question number ${i}?`));
+  assert.equal(queue.asked.length, 200, 'the tail should be bounded');
+  assert.match(queue.asked.at(-1), /499/, 'the most recent should survive');
+
+  queue.seedAsked(null);
+  queue.seedAsked(['', '   ', 42]);
+  assert.equal(queue.asked.length, 200);
+});
