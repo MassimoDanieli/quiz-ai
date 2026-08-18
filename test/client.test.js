@@ -76,7 +76,10 @@ test('complete does not retry a 400', async () => {
 });
 
 test('complete fails clearly when no API key is configured', async () => {
-  const c = new AnthropicClient({ apiKey: undefined, fetchImpl: async () => textResponse('x') });
+  // Explicitly null, not undefined: a default parameter fires on undefined, so
+  // `apiKey: undefined` would quietly pick up the ambient ANTHROPIC_API_KEY and
+  // the test would pass or fail depending on whose shell it runs in.
+  const c = new AnthropicClient({ apiKey: null, fetchImpl: async () => textResponse('x') });
   await assert.rejects(
     () => c.complete({ messages: [{ role: 'user', content: 'hi' }] }),
     /ANTHROPIC_API_KEY/,
