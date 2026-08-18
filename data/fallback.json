@@ -1,0 +1,77 @@
+[
+  {
+    "id": "fb-k8s-1",
+    "question": "A pod stays Pending although nodes have free CPU and memory. What is the usual cause?",
+    "options": [
+      "A node taint has no matching toleration",
+      "The readiness probe returned a 500 once",
+      "The container writes logs faster than fluentd",
+      "The deployment strategy is set to Recreate"
+    ],
+    "correctIndex": 0,
+    "explanation": "Taints repel pods that do not tolerate them, whatever the spare capacity.",
+    "topic": "kubernetes",
+    "difficulty": "medium",
+    "source": "static"
+  },
+  {
+    "id": "fb-k8s-2",
+    "question": "Why can a PodDisruptionBudget block a rolling node upgrade?",
+    "options": [
+      "Draining would breach the minimum available",
+      "The budget forces pods onto spot instances",
+      "It rewrites the deployment update strategy",
+      "It holds the node in NotReady until quorum"
+    ],
+    "correctIndex": 0,
+    "explanation": "Eviction is refused while removing a pod would take the deployment below minAvailable.",
+    "topic": "kubernetes",
+    "difficulty": "medium",
+    "source": "static"
+  },
+  {
+    "id": "fb-git-1",
+    "question": "You ran commands on separate lines and one failed silently. What still ran?",
+    "options": [
+      "Every following command, independently",
+      "Nothing, the shell aborts on first error",
+      "Only commands that read from standard input",
+      "Only the last command in the sequence block"
+    ],
+    "correctIndex": 0,
+    "explanation": "Without && or set -e, each line runs regardless of the previous exit code.",
+    "topic": "git",
+    "difficulty": "easy",
+    "source": "static"
+  },
+  {
+    "id": "fb-aws-1",
+    "question": "A pod using an EBS volume is rescheduled into another availability zone. What happens?",
+    "options": [
+      "It stays Pending, the volume is zone bound",
+      "It starts and the volume migrates with it",
+      "It starts with a fresh empty volume mounted",
+      "It fails with ImagePullBackOff on the node"
+    ],
+    "correctIndex": 0,
+    "explanation": "An EBS volume lives in one availability zone, so the pod must schedule there.",
+    "topic": "aws",
+    "difficulty": "medium",
+    "source": "static"
+  },
+  {
+    "id": "fb-linux-1",
+    "question": "A systemd service restarts cleanly but serves stale code. What was most likely missed?",
+    "options": [
+      "The new files never reached the unit path",
+      "The unit needs a full daemon-reexec first",
+      "The service ran before journald had started",
+      "The restart policy was set to on-failure"
+    ],
+    "correctIndex": 0,
+    "explanation": "A restart re-reads what is on disk; if the copy step failed, the old code is still there.",
+    "topic": "linux",
+    "difficulty": "easy",
+    "source": "static"
+  }
+]

@@ -1,0 +1,24 @@
+{
+  "name": "quiz-ai",
+  "version": "0.1.0",
+  "description": "Runtime AI layer for Team Quiz: on-demand question generation and contextual answer explanations.",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test 'test/*.test.js'",
+    "demo": "node demo/server.js",
+    "smoke": "node scripts/smoke.js"
+  },
+  "keywords": [
+    "quiz",
+    "anthropic",
+    "claude"
+  ],
+  "author": "Massimo Danieli",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {}
+}

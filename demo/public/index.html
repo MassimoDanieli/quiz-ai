@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>quiz-ai · bench</title>
+<style>
+  :root {
+    --paper: #eceff1;
+    --panel: #f7f8f9;
+    --ink: #17212b;
+    --ink-soft: #5b6b78;
+    --rule: #c3ced6;
+    --signal: #b4620f;
+    --confirm: #1c6660;
+    --alert: #97402c;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --serif: "Iowan Old Style", Charter, Georgia, "Times New Roman", serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .masthead {
+    border-bottom: 1px solid var(--ink);
+    padding: 14px 20px;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .masthead h1 {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin: 0;
+  }
+  .masthead p {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 12px;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 340px minmax(0, 1fr);
+    align-items: start;
+  }
+  @media (max-width: 800px) {
+    .layout { grid-template-columns: 1fr; }
+    .desk { border-right: 0; border-bottom: 1px solid var(--rule); }
+  }
+
+  .desk {
+    border-right: 1px solid var(--rule);
+    min-height: calc(100vh - 48px);
+  }
+
+  .block {
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .block:last-child { border-bottom: 0; }
+
+  .eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 12px;
+  }
+
+  label {
+    display: block;
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-bottom: 5px;
+  }
+
+  input[type=text], select {
+    width: 100%;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 0;
+    padding: 8px 9px;
+    margin-bottom: 12px;
+  }
+  input[type=text]:focus, select:focus {
+    outline: 2px solid var(--signal);
+    outline-offset: -2px;
+  }
+
+  button {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    padding: 9px 14px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--ink); }
+  button:hover:not(:disabled) { background: var(--signal); border-color: var(--signal); color: #fff; }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+  .readout { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
+  .readout dt { color: var(--ink-soft); font-size: 11px; }
+  .readout dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+  /* The bias meter: the one thing this project exists to keep honest. */
+  .meter { margin-top: 6px; }
+  .meter-row {
+    display: grid;
+    grid-template-columns: 14px 1fr 42px;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 3px;
+  }
+  .meter-key { font-size: 11px; color: var(--ink-soft); }
+  .meter-track { height: 9px; background: var(--panel); border: 1px solid var(--rule); position: relative; }
+  .meter-fill { position: absolute; inset: 0 auto 0 0; background: var(--ink); transition: width 260ms ease; }
+  .meter-fill.hot { background: var(--alert); }
+  .meter-target {
+    position: absolute; top: -2px; bottom: -2px; left: 25%;
+    width: 1px; background: var(--signal);
+  }
+  .meter-val { font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
+  .meter-note { font-size: 11px; color: var(--ink-soft); margin: 8px 0 0; }
+
+  .stage { padding: 26px 30px; }
+  @media (max-width: 800px) { .stage { padding: 20px; } }
+
+  .empty { color: var(--ink-soft); max-width: 46ch; }
+
+  .qmeta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 14px;
+  }
+  .tag { border: 1px solid var(--rule); padding: 2px 7px; }
+  .tag.ai { border-color: var(--confirm); color: var(--confirm); }
+  .tag.fallback { border-color: var(--signal); color: var(--signal); }
+
+  .question {
+    font-family: var(--serif);
+    font-size: 24px;
+    line-height: 1.3;
+    margin: 0 0 22px;
+    max-width: 30ch;
+  }
+  @media (max-width: 800px) { .question { font-size: 20px; } }
+
+  .options { list-style: none; padding: 0; margin: 0 0 22px; max-width: 62ch; }
+  .options li { margin-bottom: 7px; }
+  .opt {
+    display: grid;
+    grid-template-columns: 26px 1fr auto;
+    gap: 10px;
+    align-items: baseline;
+    width: 100%;
+    text-align: left;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    color: var(--ink);
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  .opt:hover:not(:disabled) { background: var(--panel); border-color: var(--signal); color: var(--ink); }
+  .opt .letter { color: var(--ink-soft); }
+  .opt .len { color: var(--ink-soft); font-size: 11px; }
+  .opt.picked { border-color: var(--ink); border-width: 2px; padding: 9px 11px; }
+  .opt.correct { border-color: var(--confirm); border-width: 2px; padding: 9px 11px; }
+  .opt.correct .letter { color: var(--confirm); }
+
+  .explanation {
+    font-family: var(--serif);
+    font-size: 16px;
+    line-height: 1.6;
+    max-width: 56ch;
+    border-left: 2px solid var(--confirm);
+    padding-left: 16px;
+    margin: 0 0 10px;
+  }
+  .explanation.pending { color: var(--ink-soft); font-family: var(--mono); font-size: 12px; border-left-color: var(--rule); }
+  .source-note { font-size: 11px; color: var(--ink-soft); margin: 0 0 20px; }
+
+  .error {
+    border: 1px solid var(--alert);
+    color: var(--alert);
+    padding: 10px 12px;
+    margin-bottom: 16px;
+    max-width: 60ch;
+  }
+
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <h1>quiz-ai bench</h1>
+  <p>Generate questions for a topic, then explain the answer from what the teams picked.</p>
+</header>
+
+<div class="layout">
+  <aside class="desk">
+    <section class="block">
+      <p class="eyebrow">Topic</p>
+      <label for="topic">Subject the host would announce</label>
+      <input type="text" id="topic" value="Kubernetes troubleshooting" autocomplete="off">
+      <label for="difficulty">Difficulty</label>
+      <select id="difficulty">
+        <option value="easy">easy — three months in</option>
+        <option value="medium" selected>medium — right about half the time</option>
+        <option value="hard">hard — has debugged this in production</option>
+      </select>
+      <button id="start">Start topic</button>
+    </section>
+
+    <section class="block">
+      <p class="eyebrow">Buffer</p>
+      <dl class="readout">
+        <dt>Questions ready</dt><dd id="m-buffered">—</dd>
+        <dt>Served from buffer</dt><dd id="m-fromBuffer">—</dd>
+        <dt>Served from static set</dt><dd id="m-fromFallback">—</dd>
+        <dt>Generation calls</dt><dd id="m-calls">—</dd>
+        <dt>Mean latency</dt><dd id="m-latency">—</dd>
+        <dt>Explanation cache hits</dt><dd id="m-cache">—</dd>
+      </dl>
+    </section>
+
+    <section class="block">
+      <p class="eyebrow">Answer position, served so far</p>
+      <div class="meter" id="meter"></div>
+      <p class="meter-note">The amber line marks 25%. The old static set sat at 95% on B.</p>
+      <dl class="readout" style="margin-top:12px">
+        <dt>Correct answer is longest</dt><dd id="m-longest">—</dd>
+        <dt>Mean length margin</dt><dd id="m-margin">—</dd>
+      </dl>
+    </section>
+  </aside>
+
+  <main class="stage">
+    <div id="error" class="error" hidden></div>
+
+    <div id="empty" class="empty">
+      <p>Nothing in play. Pick a topic and start — the first batch takes a couple of seconds, after that questions are generated in the background while the round runs.</p>
+    </div>
+
+    <article id="card" hidden>
+      <div class="qmeta" id="qmeta"></div>
+      <h2 class="question" id="qtext"></h2>
+      <ul class="options" id="qoptions"></ul>
+      <div id="explainBlock" hidden>
+        <p class="explanation" id="explanation"></p>
+        <p class="source-note" id="explanationSource"></p>
+      </div>
+      <div class="actions">
+        <button id="next" class="ghost">Next question</button>
+      </div>
+    </article>
+  </main>
+</div>
+
+<script type="module">
+  const $ = (id) => document.getElementById(id);
+  const LETTERS = ['A', 'B', 'C', 'D'];
+
+  let current = null;
+  let picked = null;
+
+  const state = { buffered: 0, queue: {}, metrics: {} };
+
+  async function api(path, body) {
+    const res = await fetch(path, {
+      method: body ? 'POST' : 'GET',
+      headers: body ? { 'content-type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+  }
+
+  function showError(message) {
+    const box = $('error');
+    box.textContent = message;
+    box.hidden = !message;
+  }
+
+  function busy(isBusy) {
+    $('start').disabled = isBusy;
+    $('next').disabled = isBusy;
+  }
+
+  $('start').addEventListener('click', async () => {
+    showError('');
+    busy(true);
+    $('start').textContent = 'Filling buffer…';
+    try {
+      await api('/api/queue/start', {
+        topic: $('topic').value.trim() || 'Kubernetes troubleshooting',
+        difficulty: $('difficulty').value,
+      });
+      await nextQuestion();
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      $('start').textContent = 'Start topic';
+      busy(false);
+    }
+  });
+
+  $('next').addEventListener('click', async () => {
+    busy(true);
+    try { await nextQuestion(); }
+    catch (err) { showError(err.message); }
+    finally { busy(false); }
+  });
+
+  async function nextQuestion() {
+    showError('');
+    const data = await api('/api/queue/next', {});
+    current = data.question;
+    picked = null;
+
+    $('empty').hidden = true;
+    $('card').hidden = false;
+    $('explainBlock').hidden = true;
+
+    $('qmeta').innerHTML = [
+      `<span class="tag ${data.source}">${data.source === 'ai' ? 'generated' : 'static set'}</span>`,
+      `<span class="tag">${escapeHtml(current.topic ?? '—')}</span>`,
+      `<span class="tag">${escapeHtml(current.difficulty ?? '—')}</span>`,
+      `<span class="tag">${data.buffered} ready</span>`,
+    ].join('');
+
+    $('qtext').textContent = current.question;
+    renderOptions();
+    refreshMetrics();
+  }
+
+  function renderOptions() {
+    const list = $('qoptions');
+    list.innerHTML = '';
+
+    current.options.forEach((text, i) => {
+      const li = document.createElement('li');
+      const button = document.createElement('button');
+      button.className = 'opt';
+      button.innerHTML =
+        `<span class="letter">${LETTERS[i]}</span>` +
+        `<span>${escapeHtml(text)}</span>` +
+        `<span class="len">${text.length}</span>`;
+      button.addEventListener('click', () => pick(i));
+      li.appendChild(button);
+      list.appendChild(li);
+    });
+  }
+
+  async function pick(index) {
+    if (picked !== null) return;
+    picked = index;
+
+    [...$('qoptions').querySelectorAll('.opt')].forEach((el, i) => {
+      el.disabled = true;
+      if (i === index) el.classList.add('picked');
+      if (i === current.correctIndex) el.classList.add('correct');
+    });
+
+    $('explainBlock').hidden = false;
+    const para = $('explanation');
+    para.className = 'explanation pending';
+    para.textContent = 'Writing the explanation…';
+    $('explanationSource').textContent = '';
+
+    try {
+      const result = await api('/api/explain', {
+        question: current,
+        answers: [{ team: 'Blue', choiceIndex: index }],
+      });
+      para.className = 'explanation';
+      para.textContent = result.text;
+      $('explanationSource').textContent =
+        result.source === 'cache'
+          ? 'from cache'
+          : result.source === 'fallback'
+            ? 'model unavailable — static explanation'
+            : `generated in ${result.latencyMs} ms`;
+    } catch (err) {
+      para.className = 'explanation pending';
+      para.textContent = err.message;
+    }
+    refreshMetrics();
+  }
+
+  async function refreshMetrics() {
+    try {
+      const m = await api('/api/metrics');
+      $('m-buffered').textContent = m.queue?.buffered ?? '—';
+      $('m-fromBuffer').textContent = m.queue?.fromBuffer ?? 0;
+      $('m-fromFallback').textContent = m.queue?.fromFallback ?? 0;
+      $('m-calls').textContent = m.calls;
+      $('m-latency').textContent = m.averageLatencyMs ? `${m.averageLatencyMs} ms` : '—';
+      $('m-cache').textContent = `${m.explanationCacheHitRate}%`;
+      $('m-longest').textContent = `${m.bias.correctIsLongestPct}%`;
+      $('m-margin').textContent = `${m.bias.meanMargin} chars`;
+      renderMeter(m.bias.positions, m.bias.count);
+    } catch { /* telemetry is not worth an error banner */ }
+  }
+
+  function renderMeter(positions, count) {
+    $('meter').innerHTML = LETTERS.map((letter) => {
+      const pct = positions?.[letter] ?? 0;
+      const hot = count >= 8 && pct > 45;
+      return `
+        <div class="meter-row">
+          <span class="meter-key">${letter}</span>
+          <span class="meter-track">
+            <span class="meter-fill${hot ? ' hot' : ''}" style="width:${Math.min(pct, 100)}%"></span>
+            <span class="meter-target"></span>
+          </span>
+          <span class="meter-val">${pct}%</span>
+        </div>`;
+    }).join('');
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  renderMeter({}, 0);
+  refreshMetrics();
+</script>
+</body>
+</html>
