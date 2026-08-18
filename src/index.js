@@ -46,6 +46,12 @@ export function createQuizAI(opts = {}) {
     generate,
     explain: (args) => explanations.explain(args),
 
+    /**
+     * Warm the explanation cache for a question that has just gone on screen.
+     * Fire and forget — the round does not wait for it.
+     */
+    prewarm: (args) => explanations.prewarm(args),
+
     /** One queue per room. The room id is the caller's business. */
     createQueue: (queueOpts) =>
       new QuestionQueue({ generate, fallback: queueOpts?.fallback }, queueOpts),

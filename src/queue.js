@@ -33,7 +33,11 @@ export class QuestionQueue {
       bufferSize = 4,
       refillAt = 2,
       batchSize = 5,
+      primeBatchSize = 2,
+      breakerThreshold = 3,
+      breakerCooldownMs = 60000,
       onError = () => {},
+      onEnqueue = () => {},
     } = {},
   ) {
     if (typeof generate !== 'function') throw new TypeError('generate is required');
@@ -46,12 +50,29 @@ export class QuestionQueue {
     this.bufferSize = bufferSize;
     this.refillAt = refillAt;
     this.batchSize = batchSize;
+    this.primeBatchSize = primeBatchSize;
     this.onError = onError;
+    this.onEnqueue = onEnqueue;
 
     this.buffer = [];
     this.asked = [];
     this.refilling = null;
     this.stopped = false;
+
+    /**
+     * Circuit breaker. A 401 will still be a 401 in four seconds; retrying it
+     * once per round produces a wall of identical log lines and hides the one
+     * fact that matters. After `breakerThreshold` consecutive failures — or
+     * immediately on a fatal error — generation is suspended and `lastError`
+     * is left where the caller can surface it.
+     */
+    this.breakerThreshold = breakerThreshold;
+    this.breakerCooldownMs = breakerCooldownMs;
+    this.consecutiveErrors = 0;
+    this.openedAt = null;
+    this.fatal = false;
+    this.lastError = null;
+
     this.stats = { served: 0, fromBuffer: 0, fromFallback: 0, refills: 0, errors: 0 };
   }
 
@@ -63,8 +84,58 @@ export class QuestionQueue {
     return this.buffer.length === 0;
   }
 
-  /** Fill the buffer before the first round. Safe to await; safe to skip. */
-  async prime() {
+  /** True while generation is suspended. Fatal errors never re-close. */
+  get breakerOpen() {
+    if (this.fatal) return true;
+    if (this.openedAt === null) return false;
+    if (Date.now() - this.openedAt < this.breakerCooldownMs) return true;
+    this.openedAt = null;
+    this.consecutiveErrors = 0;
+    return false;
+  }
+
+  /**
+   * What the caller should tell the user. `null` when everything is healthy.
+   * @returns {{message: string, fatal: boolean, retryInMs: number|null}|null}
+   */
+  get health() {
+    if (!this.lastError) return null;
+    if (!this.fatal && !this.breakerOpen && this.buffer.length > 0) return null;
+    return {
+      message: this.lastError.message,
+      fatal: this.fatal,
+      retryInMs: this.fatal
+        ? null
+        : Math.max(0, this.breakerCooldownMs - (Date.now() - (this.openedAt ?? 0))),
+    };
+  }
+
+  /** Clear a tripped breaker after fixing the underlying problem. */
+  reset() {
+    this.consecutiveErrors = 0;
+    this.openedAt = null;
+    this.fatal = false;
+    this.lastError = null;
+  }
+
+  /**
+   * Fill the buffer before the first round.
+   *
+   * Deliberately two-wave: a small first batch so the host is not staring at
+   * a spinner while 3000 tokens are written, then a background top-up to the
+   * full buffer size while the first question is being played.
+   *
+   * @param {object} [opts]
+   * @param {boolean} [opts.fast] Return as soon as the first small batch lands.
+   */
+  async prime({ fast = true } = {}) {
+    if (fast && this.primeBatchSize < this.bufferSize) {
+      await this.#refill({ want: this.primeBatchSize, fast: true });
+      // Top up to bufferSize without blocking the caller.
+      if (this.size > 0) this.#refill().catch(() => {});
+      return this.size;
+    }
+
     await this.#refill();
     return this.size;
   }
@@ -113,12 +184,13 @@ export class QuestionQueue {
   }
 
   /** One refill at a time: concurrent calls join the in-flight promise. */
-  async #refill() {
+  async #refill({ want, fast = false } = {}) {
     if (this.stopped) return;
+    if (this.breakerOpen) return;
     if (this.refilling) return this.refilling;
     if (this.buffer.length >= this.bufferSize) return;
 
-    const wanted = Math.max(this.batchSize, this.bufferSize - this.buffer.length);
+    const wanted = want ?? Math.max(this.batchSize, this.bufferSize - this.buffer.length);
 
     this.refilling = (async () => {
       try {
@@ -128,12 +200,43 @@ export class QuestionQueue {
           difficulty: this.difficulty,
           count: wanted,
           avoid: this.asked,
+          // The first wave is what the host waits for, so it is split as far
+          // as it goes: one question per call, all in flight together. The
+          // wait becomes the time to write a single question rather than a
+          // batch. Later refills happen in the background and can batch
+          // normally, which is cheaper.
+          ...(fast ? { perCall: 1, overAsk: 1 } : {}),
         });
         if (this.stopped) return;
+
         this.buffer.push(...questions);
+        this.consecutiveErrors = 0;
+        this.openedAt = null;
+        this.lastError = null;
+
+        // Let the caller start work that should finish before these are served
+        // — warming explanations, most obviously.
+        for (const question of questions) {
+          try {
+            this.onEnqueue(question);
+          } catch { /* a hook must never break the refill */ }
+        }
       } catch (err) {
         this.stats.errors += 1;
-        this.onError(err);
+        this.consecutiveErrors += 1;
+        this.lastError = err;
+
+        if (err?.fatal) {
+          this.fatal = true;
+          this.openedAt = Date.now();
+        } else if (this.consecutiveErrors >= this.breakerThreshold) {
+          this.openedAt = Date.now();
+        }
+
+        // Report once when the breaker trips, not once per round after that.
+        if (this.openedAt === null || this.consecutiveErrors <= this.breakerThreshold) {
+          this.onError(err);
+        }
       } finally {
         this.refilling = null;
       }

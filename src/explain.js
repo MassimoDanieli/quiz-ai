@@ -87,6 +87,40 @@ export class ExplanationService {
       this.cache.delete(this.cache.keys().next().value);
     }
   }
+
+  /**
+   * Generate the explanation for every option while the round is still being
+   * played, so the reveal is instant.
+   *
+   * The question buffer solved this for questions and left explanations to be
+   * fetched at exactly the moment everyone is waiting — the one moment latency
+   * is visible. This closes that gap: four short calls fired in parallel the
+   * instant a question goes on screen, landing well inside a 20-second timer.
+   *
+   * Covers the single-choice case, which is the common one. A room where teams
+   * split across several wrong options still needs a live call; that is the
+   * case where streaming is worth building.
+   *
+   * @param {object} opts
+   * @param {object} opts.question
+   * @param {string} [opts.team]  Team label used in the prompt.
+   * @returns {Promise<{warmed: number, failed: number, ms: number}>}
+   */
+  async prewarm({ question, team = 'the team' } = {}) {
+    const startedAt = Date.now();
+
+    const results = await Promise.allSettled(
+      question.options.map((_, choiceIndex) =>
+        this.explain({ question, answers: [{ team, choiceIndex }] }),
+      ),
+    );
+
+    const failed = results.filter(
+      (r) => r.status === 'rejected' || r.value?.source === 'fallback',
+    ).length;
+
+    return { warmed: results.length - failed, failed, ms: Date.now() - startedAt };
+  }
 }
 
 function buildPrompt(question, answers) {

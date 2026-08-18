@@ -13,13 +13,18 @@ const API_VERSION = '2023-06-01';
 /** Errors worth retrying: transient transport and server-side conditions. */
 const RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504]);
 
+/** Errors that will never fix themselves: retrying is pure noise. */
+const FATAL_STATUS = new Set([401, 403]);
+
 export class AnthropicError extends Error {
-  constructor(message, { status, body, retryable = false } = {}) {
+  constructor(message, { status, body, retryable = false, fatal = false } = {}) {
     super(message);
     this.name = 'AnthropicError';
     this.status = status;
     this.body = body;
     this.retryable = retryable;
+    /** A configuration problem, not a transient one. Stop trying, tell someone. */
+    this.fatal = fatal;
   }
 }
 
@@ -83,7 +88,10 @@ export class AnthropicClient {
     signal,
   }) {
     if (!this.apiKey) {
-      throw new AnthropicError('ANTHROPIC_API_KEY is not set', { retryable: false });
+      throw new AnthropicError('ANTHROPIC_API_KEY is not set', {
+        retryable: false,
+        fatal: true,
+      });
     }
 
     const payload = {
@@ -143,11 +151,18 @@ export class AnthropicClient {
 
       if (!response.ok) {
         const body = await safeText(response);
-        throw new AnthropicError(`Anthropic API returned ${response.status}`, {
-          status: response.status,
-          body,
-          retryable: RETRYABLE_STATUS.has(response.status),
-        });
+        const fatal = FATAL_STATUS.has(response.status);
+        throw new AnthropicError(
+          fatal
+            ? `Anthropic API rejected the credentials (${response.status}). Check ANTHROPIC_API_KEY.`
+            : `Anthropic API returned ${response.status}`,
+          {
+            status: response.status,
+            body,
+            retryable: RETRYABLE_STATUS.has(response.status),
+            fatal,
+          },
+        );
       }
 
       const data = await response.json();

@@ -37,9 +37,32 @@ A round has a countdown. Nobody waits two seconds for question N to be written w
 
 ```js
 const queue = ai.createQueue({ topic: 'Kubernetes troubleshooting', bufferSize: 4 });
-await queue.prime();          // before the first round
+await queue.prime();          // small first wave, rest fills in background
 const { question, source } = queue.take();   // returns immediately, always
 ```
+
+Two things make the first wait bearable.
+
+**Two waves.** Asking for the whole buffer up front means writing several thousand tokens before anything appears. `prime()` returns after a small first batch and tops up in the background.
+
+**Parallel calls.** Generation latency is output-token bound: one call writing eight questions takes roughly twice as long as two calls writing four, because tokens come out in sequence. Batches are split across concurrent calls (`perCall`, default 3), and the prime wave goes further — one question per call, all in flight — so the host waits for a single question rather than a batch. Parallel calls cannot see each other's output and occasionally collide; deduplication already handles that, and a discarded duplicate is cheaper than the seconds.
+
+Measured on the bench before the split: 13s from topic change to first question.
+
+The same trick applies to explanations, which is where the wait is actually visible — everyone is looking at the screen waiting for the reveal. `prewarm()` fires the explanations for all four options the moment a question goes on screen, so by the time the timer runs out they are cached:
+
+Warming happens when a question enters the buffer, not when it reaches the screen — a round is a few seconds of reading time, but a question sits in the buffer for minutes:
+
+```js
+const queue = ai.createQueue({
+  topic,
+  onEnqueue: (question) => ai.prewarm({ question }),   // warm on the way in
+});
+// ...rounds later...
+await ai.explain({ question, answers });   // cache hit, no wait
+```
+
+Covers the single-choice case. A room where teams split across several wrong options still needs a live call — that is where streaming would earn its keep.
 
 ### The bias comes back
 
@@ -56,6 +79,14 @@ Prompting alone does not fix this. `src/debias.js` is the second layer, and it r
 - `analyseSet()` runs the original position/length audit over anything served, so the same check that caught the 95% can now run against live traffic instead of a static file
 
 Generation over-asks by two and discards. Rejecting a question is cheap; serving a guessable one is not.
+
+### Failing loudly enough
+
+The first real run failed with a 401 and the bench showed the same static question over and over with no explanation why — the error only reached the server console. Degrading silently is worse than degrading.
+
+`QuestionQueue` now carries a circuit breaker. Auth failures are fatal and suspend generation immediately; transient failures suspend it after three in a row, with a cooldown. The error is reported once rather than once per round, and `queue.health` gives the caller something to put on screen. `queue.reset()` clears it after the underlying problem is fixed.
+
+The demo's static fallback also rotates. It used to return `find(...) ?? set[0]`, which is the same question forever — indistinguishable from a hung app.
 
 ### Everything the model returns is untrusted input
 
@@ -128,7 +159,7 @@ Worth noting in your favour: nothing personal is sent. The prompts contain a top
 
 ## Not built
 
-- Streaming explanations. Non-streaming is fine at 70 words, but streaming would make the wait invisible.
+- Streaming explanations. Pre-warming covers the single-choice case; streaming is the answer for rooms that split across several wrong options.
 - Open-response questions graded by the model. The real prize — it stops measuring recognition and starts measuring reasoning — and the largest jump in risk.
 - End-of-session debrief for the facilitator: where the cohort was weak, what to revisit.
 - Difficulty adaptation from live scores.

@@ -32,12 +32,15 @@ function stubGenerator({ delayMs = 0, failTimes = 0 } = {}) {
   return { generate, calls };
 }
 
-test('prime fills the buffer before the first round', async () => {
+test('prime returns quickly, then reaches the full buffer', async () => {
   const { generate } = stubGenerator();
   const queue = new QuestionQueue({ generate }, { topic: 'kubernetes', batchSize: 5 });
 
   const size = await queue.prime();
-  assert.ok(size >= 4, `buffer only reached ${size}`);
+  assert.equal(size, 2, 'the first wave should be small');
+
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(queue.size >= 4, `buffer only reached ${queue.size}`);
 });
 
 test('take returns buffered questions without awaiting the network', async () => {
@@ -97,9 +100,11 @@ test('asked questions are passed to the generator so it can avoid repeats', asyn
   const { generate, calls } = stubGenerator();
   const queue = new QuestionQueue({ generate }, { topic: 'sql', bufferSize: 4, refillAt: 2 });
   await queue.prime();
+  await new Promise((r) => setTimeout(r, 20)); // let the background top-up land
 
-  queue.take();
-  queue.take();
+  // Drain past the refill threshold — the buffer now runs deeper than it did
+  // before the two-wave prime, so three takes no longer trip it.
+  while (queue.size > queue.refillAt) queue.take();
   queue.take();
   await new Promise((r) => setTimeout(r, 20));
 
@@ -111,7 +116,11 @@ test('concurrent refills collapse into one in-flight request', async () => {
   const { generate, calls } = stubGenerator({ delayMs: 30 });
   const queue = new QuestionQueue({ generate }, { topic: 'docker' });
 
-  await Promise.all([queue.prime(), queue.prime(), queue.prime()]);
+  await Promise.all([
+    queue.prime({ fast: false }),
+    queue.prime({ fast: false }),
+    queue.prime({ fast: false }),
+  ]);
   assert.equal(calls.length, 1, `expected 1 generation call, saw ${calls.length}`);
 });
 
@@ -120,11 +129,13 @@ test('retarget drops the stale buffer and refills on the new topic', async () =>
   const queue = new QuestionQueue({ generate }, { topic: 'aws' });
   await queue.prime();
 
+  const before = calls.length;
   await queue.retarget({ topic: 'terraform', difficulty: 'hard' });
 
   assert.equal(queue.topic, 'terraform');
   assert.equal(queue.difficulty, 'hard');
-  assert.equal(calls.length, 2);
+  assert.ok(calls.length > before, 'retarget should trigger generation');
+  assert.equal(calls.at(-1).avoid.length, 0, 'a new topic starts with a clean avoid list');
   assert.ok(queue.size > 0);
 });
 
@@ -138,4 +149,88 @@ test('stop empties the buffer and blocks further refills', async () => {
 
   await queue.prime();
   assert.equal(queue.size, 0);
+});
+
+test('prime returns after a small first batch and tops up in background', async () => {
+  const { generate, calls } = stubGenerator({ delayMs: 10 });
+  const queue = new QuestionQueue(
+    { generate },
+    { topic: 'aws', bufferSize: 6, batchSize: 6, primeBatchSize: 2 },
+  );
+
+  const size = await queue.prime();
+  assert.equal(size, 2, `fast prime should return 2, got ${size}`);
+  assert.equal(calls[0].count, 2, 'first wave should be small');
+
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(queue.size > 2, `background top-up did not run, buffer at ${queue.size}`);
+});
+
+test('prime({fast:false}) fills the whole buffer before returning', async () => {
+  const { generate } = stubGenerator();
+  const queue = new QuestionQueue({ generate }, { topic: 'aws', bufferSize: 6, batchSize: 6 });
+
+  const size = await queue.prime({ fast: false });
+  assert.ok(size >= 6, `expected a full buffer, got ${size}`);
+});
+
+test('a fatal error trips the breaker immediately and stops further calls', async () => {
+  const errors = [];
+  let calls = 0;
+  const generate = async () => {
+    calls += 1;
+    const err = new Error('Anthropic API rejected the credentials (401).');
+    err.fatal = true;
+    throw err;
+  };
+
+  const queue = new QuestionQueue(
+    { generate, fallback: () => makeQuestion(1) },
+    { topic: 'aws', onError: (e) => errors.push(e) },
+  );
+
+  await queue.prime();
+  for (let i = 0; i < 10; i += 1) queue.take();
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(calls, 1, `expected one doomed call, saw ${calls}`);
+  assert.equal(errors.length, 1, 'the failure should be reported once, not per round');
+  assert.equal(queue.breakerOpen, true);
+  assert.equal(queue.health.fatal, true);
+  assert.match(queue.health.message, /credentials/);
+});
+
+test('transient errors trip the breaker only after the threshold', async () => {
+  let calls = 0;
+  const generate = async () => { calls += 1; throw new Error('network wobble'); };
+  const queue = new QuestionQueue(
+    { generate, fallback: () => makeQuestion(1) },
+    { topic: 'aws', breakerThreshold: 3 },
+  );
+
+  for (let i = 0; i < 6; i += 1) {
+    await queue.prime();
+    queue.take();
+  }
+  assert.equal(calls, 3, `expected to stop at the threshold, saw ${calls} calls`);
+  assert.equal(queue.breakerOpen, true);
+  assert.equal(queue.health.fatal, false);
+});
+
+test('reset re-closes the breaker after the problem is fixed', async () => {
+  let shouldFail = true;
+  const generate = async ({ count }) => {
+    if (shouldFail) { const e = new Error('401'); e.fatal = true; throw e; }
+    return { questions: Array.from({ length: count }, (_, i) => makeQuestion(i)), report: {} };
+  };
+  const queue = new QuestionQueue({ generate }, { topic: 'aws' });
+
+  await queue.prime();
+  assert.equal(queue.breakerOpen, true);
+
+  shouldFail = false;
+  queue.reset();
+  await queue.prime();
+  assert.ok(queue.size > 0, 'should generate again after reset');
+  assert.equal(queue.health, null);
 });

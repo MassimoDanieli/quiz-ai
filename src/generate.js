@@ -40,6 +40,7 @@ Explanation: one or two sentences saying why the correct answer holds. Not a res
  * @param {string} [opts.difficulty]
  * @param {number} [opts.count]         How many clean questions are wanted.
  * @param {number} [opts.overAsk]       Extra questions requested to absorb rejects.
+ * @param {number} [opts.perCall]       Questions per API call. See below.
  * @param {string[]} [opts.avoid]       Question stems already used this session.
  * @param {Function} [opts.random]      Injectable PRNG for reproducible shuffles.
  * @param {AbortSignal} [opts.signal]
@@ -52,6 +53,7 @@ export async function generateQuestions(
     difficulty = 'medium',
     count = 5,
     overAsk = 2,
+    perCall = 3,
     avoid = [],
     random = Math.random,
     signal,
@@ -65,24 +67,60 @@ export async function generateQuestions(
   }
 
   const requested = count + overAsk;
-  const response = await client.complete({
-    system: SYSTEM_PROMPT,
-    maxTokens: 400 * requested + 300,
-    temperature: 1,
-    signal,
-    messages: [{ role: 'user', content: buildUserPrompt({ topic, difficulty, requested, avoid }) }],
-  });
 
-  const parsed = parseJsonLoose(response.text);
-  if (!parsed.ok) {
-    throw new Error(`Could not read the generated batch (${parsed.reason})`);
+  /**
+   * Latency here is output-token bound: one call writing eight questions takes
+   * roughly twice as long as two calls writing four, because the tokens come
+   * out in sequence. Splitting the batch across concurrent calls cuts the wait
+   * by about the split factor.
+   *
+   * The cost is that parallel calls cannot see each other's questions, so they
+   * occasionally collide. Deduplication below already handles that, and a
+   * discarded duplicate is cheaper than the extra seconds.
+   */
+  const chunks = [];
+  for (let remaining = requested; remaining > 0; remaining -= perCall) {
+    chunks.push(Math.min(perCall, remaining));
   }
 
-  const rawList = Array.isArray(parsed.value)
-    ? parsed.value
-    : Array.isArray(parsed.value?.questions)
-      ? parsed.value.questions
-      : [parsed.value];
+  const startedAt = Date.now();
+  const settled = await Promise.allSettled(
+    chunks.map((size) =>
+      client.complete({
+        system: SYSTEM_PROMPT,
+        maxTokens: 400 * size + 300,
+        temperature: 1,
+        signal,
+        messages: [
+          { role: 'user', content: buildUserPrompt({ topic, difficulty, requested: size, avoid }) },
+        ],
+      }),
+    ),
+  );
+
+  const responses = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+  if (responses.length === 0) {
+    // Every call failed; surface the first reason, which carries the fatal flag.
+    throw settled[0].reason;
+  }
+
+  const rawList = [];
+  const parseErrors = [];
+  for (const response of responses) {
+    const parsed = parseJsonLoose(response.text);
+    if (!parsed.ok) {
+      parseErrors.push(parsed.reason);
+      continue;
+    }
+    const value = parsed.value;
+    if (Array.isArray(value)) rawList.push(...value);
+    else if (Array.isArray(value?.questions)) rawList.push(...value.questions);
+    else rawList.push(value);
+  }
+
+  if (rawList.length === 0) {
+    throw new Error(`Could not read the generated batch (${parseErrors[0] ?? 'no questions returned'})`);
+  }
 
   const valid = [];
   const invalid = [];
@@ -107,13 +145,16 @@ export async function generateQuestions(
     questions: deduped.slice(0, count),
     report: {
       requested,
+      calls: chunks.length,
+      callsFailed: settled.length - responses.length,
       returned: rawList.length,
       invalid,
+      parseErrors,
       rejectedForBias: rejected.map((r) => r.issues),
       deduplicated: accepted.length - deduped.length,
       delivered: Math.min(deduped.length, count),
-      latencyMs: response.latencyMs,
-      model: response.model,
+      latencyMs: Date.now() - startedAt,
+      model: responses[0].model,
     },
   };
 }

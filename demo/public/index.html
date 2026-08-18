@@ -212,6 +212,25 @@
     max-width: 60ch;
   }
 
+  /* Degraded, not broken: the app still works, but on the static set. */
+  .degraded {
+    border: 1px solid var(--signal);
+    border-left-width: 3px;
+    padding: 10px 12px;
+    margin-bottom: 16px;
+    max-width: 60ch;
+    font-size: 12px;
+  }
+  .degraded strong {
+    display: block;
+    color: var(--signal);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-size: 10px;
+    margin-bottom: 5px;
+  }
+  .degraded code { background: var(--panel); padding: 1px 4px; }
+
   .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
   @media (prefers-reduced-motion: reduce) {
@@ -266,6 +285,7 @@
 
   <main class="stage">
     <div id="error" class="error" hidden></div>
+    <div id="degraded" class="degraded" hidden></div>
 
     <div id="empty" class="empty">
       <p>Nothing in play. Pick a topic and start — the first batch takes a couple of seconds, after that questions are generated in the background while the round runs.</p>
@@ -312,6 +332,25 @@
     box.hidden = !message;
   }
 
+  /**
+   * The failure that started all this was invisible: the server logged a 401
+   * and the page silently served the same static question forever. Whatever
+   * the queue knows, the person watching the screen should know too.
+   */
+  function showHealth(health) {
+    const box = $('degraded');
+    if (!health) { box.hidden = true; return; }
+
+    const advice = health.fatal
+      ? 'Generation is off until this is fixed. Check <code>ANTHROPIC_API_KEY</code>, then restart.'
+      : `Generation is paused; retrying in about ${Math.round(health.retryInMs / 1000)}s.`;
+
+    box.innerHTML =
+      `<strong>Running on the static set</strong>` +
+      `${escapeHtml(health.message)}<br>${advice}`;
+    box.hidden = false;
+  }
+
   function busy(isBusy) {
     $('start').disabled = isBusy;
     $('next').disabled = isBusy;
@@ -322,10 +361,11 @@
     busy(true);
     $('start').textContent = 'Filling buffer…';
     try {
-      await api('/api/queue/start', {
+      const started = await api('/api/queue/start', {
         topic: $('topic').value.trim() || 'Kubernetes troubleshooting',
         difficulty: $('difficulty').value,
       });
+      showHealth(started.health);
       await nextQuestion();
     } catch (err) {
       showError(err.message);
@@ -345,6 +385,7 @@
   async function nextQuestion() {
     showError('');
     const data = await api('/api/queue/next', {});
+    showHealth(data.health);
     current = data.question;
     picked = null;
 

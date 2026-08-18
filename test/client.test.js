@@ -213,3 +213,52 @@ test('the explanation cache evicts least-recently-used entries', async () => {
   }
   assert.equal(service.cache.size, 2);
 });
+
+test('generateQuestions splits the batch across parallel calls', async () => {
+  const { client: c, calls } = client([textResponse(GENERATED)]);
+  await generateQuestions(
+    { client: c },
+    { topic: 'kubernetes', count: 6, overAsk: 2, perCall: 3 },
+  );
+  // 8 requested at 3 per call = 3 calls.
+  assert.equal(calls.length, 3, `expected 3 parallel calls, saw ${calls.length}`);
+});
+
+test('generateQuestions survives one failed call out of several', async () => {
+  let n = 0;
+  const { client: c } = client([
+    () => (++n === 1 ? errorResponse(500) : textResponse(GENERATED)),
+  ], { maxRetries: 0 });
+
+  const { questions, report } = await generateQuestions(
+    { client: c },
+    { topic: 'kubernetes', count: 2, overAsk: 1, perCall: 1 },
+  );
+
+  assert.ok(questions.length > 0, 'partial results should still be usable');
+  assert.equal(report.callsFailed, 1);
+});
+
+test('generateQuestions rethrows a fatal error when every call fails', async () => {
+  const { client: c } = client([errorResponse(401)], { maxRetries: 0 });
+  await assert.rejects(
+    () => generateQuestions({ client: c }, { topic: 'aws', count: 2, perCall: 1 }),
+    (err) => err.fatal === true && /credentials/.test(err.message),
+  );
+});
+
+test('prewarm caches an explanation for every option', async () => {
+  const { client: c, calls } = client([textResponse('warm')]);
+  const service = new ExplanationService({ client: c });
+
+  const result = await service.prewarm({ question: QUESTION });
+  assert.equal(result.warmed, 4);
+  assert.equal(calls.length, 4);
+
+  const hit = await service.explain({
+    question: QUESTION,
+    answers: [{ team: 'Blue', choiceIndex: 2 }],
+  });
+  assert.equal(hit.source, 'cache');
+  assert.equal(calls.length, 4, 'a warmed option should not call the API again');
+});

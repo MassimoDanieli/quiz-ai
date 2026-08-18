@@ -31,6 +31,34 @@ let queue = null;
 /** Everything served so far, so the bias statistics mean something. */
 const served = [];
 
+/**
+ * Rotate through the static set, preferring the requested topic but never
+ * handing back the same question twice in a row. A fallback that repeats one
+ * question is indistinguishable from a hung app.
+ */
+function makeFallback() {
+  const used = new Set();
+
+  return ({ topic }) => {
+    // On-topic first, then everything else — a two-question loop is barely
+    // better than one repeated question.
+    const pool = [
+      ...fallbackSet.filter((q) => q.topic === topic),
+      ...fallbackSet.filter((q) => q.topic !== topic),
+    ];
+
+    let next = pool.find((q) => !used.has(q.id));
+    if (!next) {
+      // Exhausted: start the cycle again rather than returning nothing.
+      used.clear();
+      next = pool[0];
+    }
+
+    used.add(next.id);
+    return next;
+  };
+}
+
 const routes = {
   'POST /api/queue/start': async (body) => {
     queue?.stop();
@@ -38,13 +66,19 @@ const routes = {
       topic: body.topic,
       difficulty: body.difficulty || 'medium',
       bufferSize: 4,
-      fallback: ({ topic }) =>
-        fallbackSet.find((q) => q.topic === topic) ?? fallbackSet[0],
+      fallback: makeFallback(),
       onError: (err) => console.error('[queue]', err.message),
+      // Warm the explanations as soon as a question lands in the buffer, not
+      // when it reaches the screen — by the time it is served they are cached.
+      onEnqueue: (question) => { ai.prewarm({ question, team: 'Blue' }).catch(() => {}); },
     });
     const startedAt = Date.now();
     const size = await queue.prime();
-    return { buffered: size, primeMs: Date.now() - startedAt };
+    return {
+      buffered: size,
+      primeMs: Date.now() - startedAt,
+      health: queue.health,
+    };
   },
 
   'POST /api/queue/next': async () => {
@@ -52,7 +86,17 @@ const routes = {
     const { question, source } = queue.take();
     if (!question) throw new HttpError(503, 'No question available yet — try again in a moment');
     served.push(question);
-    return { question, source, buffered: queue.size, stats: queue.stats };
+
+    // Fallback questions never passed through onEnqueue, so warm them now.
+    if (source === 'fallback') ai.prewarm({ question, team: 'Blue' }).catch(() => {});
+
+    return {
+      question,
+      source,
+      buffered: queue.size,
+      stats: queue.stats,
+      health: queue.health,
+    };
   },
 
   'POST /api/explain': async (body) => {
