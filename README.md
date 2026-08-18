@@ -62,7 +62,12 @@ const queue = ai.createQueue({
 await ai.explain({ question, answers });   // cache hit, no wait
 ```
 
-Covers the single-choice case. A room where teams split across several wrong options still needs a live call — that is where streaming would earn its keep.
+Warming is bounded (`prewarmConcurrency`, default 4). A background top-up can deliver five questions at once, and four explanations each would be twenty simultaneous calls — enough to slow down the explanation somebody is actually waiting for. Speculative work must never crowd out real work.
+
+Two cases stay slow by construction:
+
+- **The first question of a session** is served the moment it is generated, so there is no warming window. The bench shows this plainly; a real round has a countdown, and the warm-up finishes long before it expires. Meanwhile the reveal shows the static explanation generated with the question, and the contextual one replaces it when it lands — so the wait is never empty.
+- **A room split across several wrong options** is a combination that was not warmed, and needs a live call. That is where streaming would earn its keep.
 
 ### The bias comes back
 

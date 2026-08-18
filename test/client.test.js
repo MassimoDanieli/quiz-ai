@@ -262,3 +262,39 @@ test('prewarm caches an explanation for every option', async () => {
   assert.equal(hit.source, 'cache');
   assert.equal(calls.length, 4, 'a warmed option should not call the API again');
 });
+
+test('prewarm never puts more than the configured number of calls in flight', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const impl = async () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 15));
+    inFlight -= 1;
+    return textResponse('warm');
+  };
+  const c = new AnthropicClient({ apiKey: 'k', fetchImpl: impl });
+  const service = new ExplanationService({ client: c }, { prewarmConcurrency: 2 });
+
+  // Five questions arriving together, four options each: twenty calls.
+  const questions = Array.from({ length: 5 }, (_, n) => ({
+    ...QUESTION,
+    id: `q${n}`,
+    question: `Variant ${n} of the pending pod question, worded differently?`,
+  }));
+  await Promise.all(questions.map((question) => service.prewarm({ question })));
+
+  assert.ok(peak <= 2, `peak concurrency was ${peak}, expected at most 2`);
+});
+
+test('prewarm skips options that are already cached', async () => {
+  const { client: c, calls } = client([textResponse('warm')]);
+  const service = new ExplanationService({ client: c });
+
+  await service.explain({ question: QUESTION, answers: [{ team: 'the team', choiceIndex: 0 }] });
+  assert.equal(calls.length, 1);
+
+  const result = await service.prewarm({ question: QUESTION });
+  assert.equal(result.warmed, 4);
+  assert.equal(calls.length, 4, 'the cached option should not be re-fetched');
+});

@@ -435,26 +435,52 @@
 
     $('explainBlock').hidden = false;
     const para = $('explanation');
-    para.className = 'explanation pending';
-    para.textContent = 'Writing the explanation…';
-    $('explanationSource').textContent = '';
+    const note = $('explanationSource');
+
+    /**
+     * The first question of a session has no pre-warm window: it is served the
+     * moment it is generated, so its explanation is still being written. Every
+     * generated question already carries a static explanation, though — show
+     * that immediately rather than an empty wait, and let the contextual one
+     * replace it when it lands.
+     */
+    if (current.explanation) {
+      para.className = 'explanation';
+      para.textContent = current.explanation;
+      note.textContent = 'tailoring this to your answer…';
+    } else {
+      para.className = 'explanation pending';
+      para.textContent = 'Writing the explanation…';
+      note.textContent = '';
+    }
+
+    const forQuestion = current;
 
     try {
       const result = await api('/api/explain', {
         question: current,
         answers: [{ team: 'Blue', choiceIndex: index }],
       });
+
+      // The round may have moved on while this was in flight.
+      if (current !== forQuestion) return;
+
       para.className = 'explanation';
       para.textContent = result.text;
-      $('explanationSource').textContent =
+      note.textContent =
         result.source === 'cache'
           ? 'from cache'
           : result.source === 'fallback'
             ? 'model unavailable — static explanation'
             : `generated in ${result.latencyMs} ms`;
     } catch (err) {
-      para.className = 'explanation pending';
-      para.textContent = err.message;
+      if (current !== forQuestion) return;
+      // Keep the static explanation on screen; it is better than an error.
+      note.textContent = current.explanation ? `contextual version unavailable (${err.message})` : '';
+      if (!current.explanation) {
+        para.className = 'explanation pending';
+        para.textContent = err.message;
+      }
     }
     refreshMetrics();
   }

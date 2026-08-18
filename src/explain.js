@@ -29,12 +29,38 @@ export class ExplanationService {
    * @param {number} [opts.cacheSize]  Max cached explanations. Default 500.
    * @param {number} [opts.timeoutMs]  Give up and fall back after this. Default 6000.
    */
-  constructor({ client }, { cacheSize = 500, timeoutMs = 6000 } = {}) {
+  constructor({ client }, { cacheSize = 500, timeoutMs = 6000, prewarmConcurrency = 4 } = {}) {
     this.client = client;
     this.cacheSize = cacheSize;
     this.timeoutMs = timeoutMs;
     this.cache = new Map();
     this.stats = { hits: 0, misses: 0, fallbacks: 0 };
+
+    /**
+     * Pre-warming is speculative work, so it must never crowd out a real
+     * request. A background top-up can deliver five questions at once, and
+     * four explanations each would put twenty calls in flight simultaneously
+     * — enough to hit rate limits and slow down the explanation someone is
+     * actually waiting for. This bounds it.
+     */
+    this.prewarmConcurrency = prewarmConcurrency;
+    this.inFlight = 0;
+    this.waiting = [];
+  }
+
+  /** Take a slot, waiting if the limit is reached. */
+  async #acquire() {
+    if (this.inFlight < this.prewarmConcurrency) {
+      this.inFlight += 1;
+      return;
+    }
+    await new Promise((resolve) => this.waiting.push(resolve));
+    this.inFlight += 1;
+  }
+
+  #release() {
+    this.inFlight -= 1;
+    this.waiting.shift()?.();
   }
 
   get hitRate() {
@@ -110,9 +136,18 @@ export class ExplanationService {
     const startedAt = Date.now();
 
     const results = await Promise.allSettled(
-      question.options.map((_, choiceIndex) =>
-        this.explain({ question, answers: [{ team, choiceIndex }] }),
-      ),
+      question.options.map(async (_, choiceIndex) => {
+        // Already cached: no slot needed.
+        if (this.cache.has(cacheKey(question, [{ team, choiceIndex }]))) {
+          return { source: 'cache' };
+        }
+        await this.#acquire();
+        try {
+          return await this.explain({ question, answers: [{ team, choiceIndex }] });
+        } finally {
+          this.#release();
+        }
+      }),
     );
 
     const failed = results.filter(
