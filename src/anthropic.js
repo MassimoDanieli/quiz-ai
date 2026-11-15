@@ -39,7 +39,7 @@ export class AnthropicClient {
    */
   constructor({
     apiKey = process.env.ANTHROPIC_API_KEY,
-    model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+    model = process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5',
     timeoutMs = 8000,
     maxRetries = 2,
     fetchImpl = globalThis.fetch,
